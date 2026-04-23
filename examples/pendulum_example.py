@@ -106,7 +106,7 @@ def build_parser():
     p.add_argument("--n_points", type=int, default=10, help="Points per trajectory (#transitions = n_points - 1)")
     p.add_argument("--n_trajectories_train", type=int, default=200)
     p.add_argument("--n_trajectories_val", type=int, default=40)
-    p.add_argument("--jacobi_loss", type=float, default=-1.0)
+    p.add_argument("--jacobi_loss", type=float, default=-1.0, help="Jacobi loss weight, set positive to use it.")
     p.add_argument("--loss_method", default="exact forward",
                    choices=["random", "exact forward", "exact backward", "spectral", "batch_max", "random loop", "exact_manual"])
     p.add_argument("--sim_batch", action="store_true", help="Simulate fresh data each batch instead of a fixed dataset")
@@ -116,7 +116,7 @@ def build_parser():
     # plotting parameters
     p.add_argument("--plot_error", action="store_true", help="Plot loss curves after training")
     p.add_argument("--plot_trajectory", action="store_true", help="Plot a rollout after training")
-    p.add_argument("--eval_steps", type=int, default=256)
+    p.add_argument("--eval_steps", type=int, default=256, help="Rollout length for --plot_trajectory")
 
     return p
 
