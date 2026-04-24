@@ -5,7 +5,7 @@ This repository contains the Python implementation for my thesis on **Direct Poi
 ## Project Structure
 
 - **Root Directory**: Contains core logic, including ML models (Hamiltonian and Poisson Matrix architectures), training loops, and utility scripts.
-- **`simulators/`**: Contains simulator classes and physics engines for the different systems.
+- **`simulators/`**: Contains simulator classes for the different systems.
 - **`examples/`**: A folder containing 5 standalone scripts for different physical systems.
 
 ## Installation
