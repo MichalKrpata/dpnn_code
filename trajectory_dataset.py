@@ -42,8 +42,6 @@ class TrajectoryDataset(Dataset):
         self.next_states = next_states.to(device)
         self.device = device
         
-        
-
     def __len__(self) -> int:
         return self.total_samples
     
@@ -68,6 +66,34 @@ class TrajectoryDataset(Dataset):
         return self.states[start_idx:end_idx], self.next_states[start_idx:end_idx]
     
 
+class BatchLoader:
+    def __init__(self, dataset: TrajectoryDataset, batch_size: int = 32, shuffle: bool = False):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.dataset_len = len(dataset)
+
+    def __iter__(self):
+        if self.shuffle:
+            self.indices = torch.randperm(self.dataset_len, device=self.dataset.device)
+        else:
+            self.indices = torch.arange(self.dataset_len, device=self.dataset.device)
+        self.i = 0
+        return self
+    
+    def __next__(self):
+        if self.i >= self.dataset_len:
+            raise StopIteration
+            
+        batch_idx = self.indices[self.i : self.i + self.batch_size]
+        self.i += self.batch_size
+        
+        return self.dataset.states[batch_idx], self.dataset.next_states[batch_idx]
+
+    def __len__(self):
+        return (self.dataset_len + self.batch_size - 1) // self.batch_size
+    
+
 def create_dataset_from_simulator(simulator, n_trajectories, dt, n_steps, seed=None, initial_states=None, method='rk4'):
     """Receives a simulator and creates a TrajectoryDataset by simulating a given number of trajectories"""
     if initial_states is None:
@@ -75,8 +101,8 @@ def create_dataset_from_simulator(simulator, n_trajectories, dt, n_steps, seed=N
     
     _, z_traj, _ = simulator.simulate_batch(initial_states, dt, n_steps, method=method)
     
-    states = z_traj[:, :-1, :]
-    next_states = z_traj[:, 1:, :]
+    states = z_traj[:, :-1, :].contiguous()
+    next_states = z_traj[:, 1:, :].contiguous()
     
     dataset = TrajectoryDataset(states, next_states)
     return dataset
@@ -91,6 +117,11 @@ def create_dataloaders(
     device: Optional[torch.device] = None
 ) -> Tuple[DataLoader, Optional[DataLoader]]:
     """Creates a torch.utils.data.Dataloader from two datasets"""
+    if train_dataset.device.type == 'cuda' or num_workers == 0:
+        train_loader = BatchLoader(train_dataset, batch_size=batch_size, shuffle=shuffle_train)
+        val_loader = BatchLoader(val_dataset, batch_size=batch_size, shuffle=False) if val_dataset else None
+        return train_loader, val_loader
+    
     if device is not None and isinstance(device, str):
         device = torch.device(device)
         

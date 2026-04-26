@@ -118,8 +118,9 @@ def build_parser():
     p.add_argument("--n_trajectories_train", type=int, default=4096)
     p.add_argument("--n_trajectories_val", type=int, default=128)
     p.add_argument("--jacobi_loss", type=float, default=0.002, help="Jacobi loss weight, set positive to use it.")
-    p.add_argument("--loss_method", default="random",
-                   choices=["random", "exact forward", "exact backward", "spectral", "batch_max", "random loop", "exact_manual"])
+    p.add_argument("--loss_method", default="exact forward",
+                   choices=["random", "exact forward", "exact_forward", "exact backward", "exact_backward", "spectral", 
+                            "batch_max", "monte_carlo", "random loop", "random_loop", "Monte Carlo"])
     p.add_argument("--sim_batch", default=False, action="store_true", help="Simulate fresh data for each batch instead of a fixed dataset")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--cuda", action="store_true")

@@ -20,7 +20,7 @@ class TrainableModel(BaseSimulator):
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         """Compute the time derivative dz/dt."""
-        z_grad = z.clone().requires_grad_(True)
+        z_grad = z.detach().requires_grad_(True)
         
         H = self.energy(z_grad)
         
@@ -46,11 +46,8 @@ class TrainableModel(BaseSimulator):
         return super().simulate_batch(z0, dt, n_steps, method)
 
 
-def movement_loss(model, z_n, z_n1, dt):
+def movement_loss(model, z_n, z_n1, L_n, dt):
     """Calculates the loss from the trajectory"""
-    z_n = z_n.clone().detach().requires_grad_(True)
-    z_n1 = z_n1.clone().detach().requires_grad_(True)
-    
     H_n = model.hamiltonian(z_n)
     H_n1 = model.hamiltonian(z_n1)
     
@@ -66,7 +63,6 @@ def movement_loss(model, z_n, z_n1, dt):
         create_graph=model.training
     )[0]
     
-    L_n = model.L_matrix(z_n)
     L_n1 = model.L_matrix(z_n1)
     
     L_grad_H_n = torch.bmm(L_n, grad_H_n.unsqueeze(-1)).squeeze(-1)
@@ -109,11 +105,12 @@ def jacobi_loss_linear(model):
 
 
 def jacobi_loss_random(model, z, iter=5, dist="rademacher"):
-    """Stochastic approximation of the Jacobiator's Frobenius norm (batched)"""
     B, dim = z.shape
-    z_exp = z.repeat(iter, 1).detach().requires_grad_(True)
+    total_samples = iter * B
     
-    L = model.L_matrix(z_exp)
+    z_exp = z.repeat(iter, 1).detach().requires_grad_(True)
+
+    L_exp = model.L_matrix(z_exp)
 
     # randomly sample a batch of random vectors with the given distribution
     total_samples = iter * B
@@ -135,9 +132,9 @@ def jacobi_loss_random(model, z, iter=5, dist="rademacher"):
 
     def compute_term_vec(vec_a, vec_b, vec_c, retain_graph=True):
         # computes one term of the cyclic sum
-        S = torch.einsum('bi,bij,bj->b', vec_b, L, vec_c)
+        S = torch.einsum('bi,bij,bj->b', vec_b, L_exp, vec_c)
         
-        La = torch.einsum('bij,bj->bi', L, vec_a)
+        La = torch.einsum('bij,bj->bi', L_exp, vec_a)
         
         grad_S = torch.autograd.grad(S.sum(), z_exp, create_graph=True, retain_graph=retain_graph)[0]
         
@@ -152,10 +149,8 @@ def jacobi_loss_random(model, z, iter=5, dist="rademacher"):
     return loss_i.mean()
 
 
-def jacobi_loss_batch_max(model, z, iter=5):
+def jacobi_loss_batch_max(model, z, L, iter=5):
     """Monte Carlo approximation of Jacobiator's spectral norm"""
-    z = z.detach().clone().requires_grad_(True)
-    L = model.L_matrix(z)
     B, dim, _ = L.shape
     
     def compute_term(vec_a, vec_b, vec_c):
@@ -164,7 +159,7 @@ def jacobi_loss_batch_max(model, z, iter=5):
         La = torch.einsum('bij,bj->bi', L, vec_a)
         return (La * grad_S).sum(dim=1)
     
-    worst_loss = 0.0
+    worst_loss = torch.tensor(0.0, device=z.device, requires_grad=True)
 
     # choose the maximum encountered value of the contraction
     for _ in range(iter):
@@ -188,24 +183,17 @@ def jacobi_loss_batch_max(model, z, iter=5):
     return worst_loss
 
 
-def jacobi_loss_loop(model, z):
-    """Exact Frobenius norm looped by components (slow, ineffective)"""
-    z = z.detach().clone().requires_grad_(True)
-    L = model.L_matrix(z)
-    B, dim, _ = L.shape
+def jacobi_loss_exact(model, z, L):
+    """Exact Frobenius norm, uses backward AD"""
+    def reduced_L(z_in):
+        return model.L_matrix(z_in).sum(dim=0)
     
-    batch_jac = torch.zeros(B, dim, dim, dim, device=z.device)
-    
-    for j in range(dim):
-        for k in range(j + 1, dim):
+    print(L.shape)
 
-            grad_L_jk = torch.autograd.grad(
-                L[:, j, k].sum(), z, create_graph=True, retain_graph=True
-            )[0]
-            
-            batch_jac[:, j, k, :] = grad_L_jk
-            batch_jac[:, k, j, :] = -grad_L_jk
-            
+    Lz_grad = torch.autograd.functional.jacobian(reduced_L, z, create_graph=True)
+    
+    batch_jac = Lz_grad.permute(2, 0, 1, 3)
+    
     term1 = torch.einsum('bil,bjkl->bijk', L, batch_jac)
     term2 = term1.permute(0, 2, 3, 1)
     term3 = term1.permute(0, 3, 1, 2)
@@ -213,50 +201,27 @@ def jacobi_loss_loop(model, z):
     return (term1 + term2 + term3).pow(2).sum(dim=(1,2,3)).mean()
 
 
-def jacobi_loss_exact(model, z):
-    """Exact Frobenius norm, uses backward AD"""
-    z = z.detach().clone().requires_grad_(True)
-
-    Lz = model.L_matrix(z)
-    
-    def reduced_L(z_in):
-        return model.L_matrix(z_in).sum(dim=0)
-
-    # default is 'reverse-mode', 'forward-mode' is "experimental"
-    Lz_grad = torch.autograd.functional.jacobian(reduced_L, z, create_graph=True)
-    
-    batch_jac = Lz_grad.permute(2, 0, 1, 3)
-    
-    term1 = torch.einsum('bil,bjkl->bijk', Lz, batch_jac)
-    term2 = term1.permute(0, 2, 3, 1)
-    term3 = term1.permute(0, 3, 1, 2)
-    
-    return (term1 + term2 + term3).pow(2).sum(dim=(1,2,3)).mean()
-
-
-def jacobi_loss_forward(model, z):
+def jacobi_loss_forward(model, z, L):
     """Exact Frobenius norm, uses forward AD"""
-    z = z.detach().clone().requires_grad_(True)
+    z_detached = z.detach()
     
     def compute_single_L(z_single):
         return model.L_matrix(z_single.unsqueeze(0)).squeeze(0)
 
     # forward mode AD on a batch of inputs
-    batch_jac = torch.func.vmap(torch.func.jacfwd(compute_single_L))(z)
+    batch_jac = torch.func.vmap(torch.func.jacfwd(compute_single_L))(z_detached)
     
     Lz = model.L_matrix(z)
     
-    term1 = torch.einsum('bil,bjkl->bijk', Lz, batch_jac)
+    term1 = torch.einsum('bil,bjkl->bijk', L, batch_jac)
     term2 = term1.permute(0, 2, 3, 1)
     term3 = term1.permute(0, 3, 1, 2)
     
     return (term1 + term2 + term3).pow(2).sum(dim=(1,2,3)).mean()
 
 
-def jacobi_loss_spectral(model, z, iter=5):
+def jacobi_loss_spectral(model, z, L, iter=5):
     """Iterative approximation of the spectral norm"""
-    z = z.detach().clone().requires_grad_(True)
-    L = model.L_matrix(z)
     B, dim, _ = L.shape
     
     u = torch.randn(B, dim, device=z.device)
@@ -308,7 +273,7 @@ def jacobi_loss_spectral(model, z, iter=5):
     return (final_violation ** 2).mean()
 
 
-def jacobi_loss_random_loop(model, z, iter=5, dist="rademacher"):
+def jacobi_loss_random_loop(model, z, L, iter=5, dist="rademacher"):
     """Stochastic approximation of the Jacobiator's Frobenius norm (looped)"""
     B, dim = z.shape
     device = z.device
@@ -326,9 +291,6 @@ def jacobi_loss_random_loop(model, z, iter=5, dist="rademacher"):
             raise ValueError("dist must be 'normal', 'rademacher' or 'uniform'")
 
     for _ in range(iter):
-        z_sample = z.detach().clone().requires_grad_(True)
-        L = model.L_matrix(z_sample)
-
         u = get_noise((B, dim))
         v = get_noise((B, dim))
         w = get_noise((B, dim))
@@ -339,7 +301,7 @@ def jacobi_loss_random_loop(model, z, iter=5, dist="rademacher"):
 
             grad_S = torch.autograd.grad(
                 S.sum(),
-                z_sample,
+                z,
                 create_graph=True,
                 retain_graph=True
             )[0]
@@ -351,29 +313,20 @@ def jacobi_loss_random_loop(model, z, iter=5, dist="rademacher"):
         term3 = compute_term_vec(w, u, v)
 
         loss_i = (term1 + term2 + term3).pow(2)
-        total_loss += loss_i.mean()
+        total_loss = total_loss + loss_i.mean()
         
     return total_loss / iter 
-
-
-def jacobi_loss_manual(model, z):
-    """Exact Frobenius norm with manual forward mode AD"""
-    z = z.detach().clone().requires_grad_(True)
-
-    Lz, batch_jac = model.L_matrix.forward_with_jacobian(z)
-    
-    term1 = torch.einsum('bil,bjkl->bijk', Lz, batch_jac)
-    term2 = term1.permute(0, 2, 3, 1)
-    term3 = term1.permute(0, 3, 1, 2)
-    
-    return (term1 + term2 + term3).pow(2).sum(dim=(1,2,3)).mean()
 
 
 def total_loss(model, z_n, z_n1, dt, lambda_jacobi=0.0, lambda_energy=0.0, method="random", iter=5, dist="normal"):
     """Calculates all used losses"""
     losses = {}
+
+    z_n = z_n.detach().requires_grad_(True)
+    z_n1 = z_n1.detach().requires_grad_(True)
+    L = model.L_matrix(z_n)
     
-    losses['movement'] = movement_loss(model, z_n, z_n1, dt)
+    losses['movement'] = movement_loss(model, z_n, z_n1, L, dt)
 
     if lambda_energy > 0.0:
         losses['energy'] = lambda_energy * energy_loss(model, z_n, z_n1)
@@ -387,19 +340,15 @@ def total_loss(model, z_n, z_n1, dt, lambda_jacobi=0.0, lambda_energy=0.0, metho
                 if method == 'random':
                     j_loss = jacobi_loss_random(model, z_n, iter=iter, dist=dist)
                 elif method in ['Monte Carlo', 'batch_max']:
-                    j_loss = jacobi_loss_batch_max(model, z=z_n, iter=iter)
-                elif method == "loop":
-                    j_loss = jacobi_loss_loop(model, z_n)
+                    j_loss = jacobi_loss_batch_max(model, z=z_n, L=L, iter=iter)
                 elif method in ["exact backward", "exact_backward"]:
-                    j_loss = jacobi_loss_exact(model, z_n)
+                    j_loss = jacobi_loss_exact(model, z_n, L)
                 elif method == "spectral":
-                    j_loss = jacobi_loss_spectral(model, z_n, iter=iter)
+                    j_loss = jacobi_loss_spectral(model, z_n, L, iter=iter)
                 elif method in ["random loop", "random_loop"]:
-                    j_loss = jacobi_loss_random_loop(model, z_n, iter=iter)
-                elif method in ["exact manual", "exact_manual"]:
-                    j_loss = jacobi_loss_manual(model, z_n)
+                    j_loss = jacobi_loss_random_loop(model, z_n, L, iter=iter)
                 elif method in ["exact forward", "exact_forward"]:
-                    j_loss = jacobi_loss_forward(model, z_n)
+                    j_loss = jacobi_loss_forward(model, z_n, L)
                 else:
                     raise ValueError(f"Unknown Jacobi loss method: {method}")
             
@@ -481,6 +430,9 @@ def train(
         # evaluation loop
         model.eval()
         running_losses_val = {}
+
+        for param in model.parameters():
+            param.requires_grad = False
         
         for z_n, z_n1 in val_loader:
             z_n = z_n.to(device)
@@ -505,11 +457,18 @@ def train(
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
 
+            #peak_mem_mb = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
+            #print("Peak mem: ", peak_mem_mb)
+            #torch.cuda.reset_peak_memory_stats(device)
+
         epoch_time = time.time() - start_time
         history['epoch_times'].append(epoch_time)
 
         if (epoch + 1) % print_every == 0:
             print(f"Epoch {epoch+1}/{epochs} | Train: {current_train_total:.3e} | Val: {current_val_total:.3e} | {epoch_time:.1f}s")
+
+        for param in model.parameters():
+            param.requires_grad = True
 
     return history
 
@@ -570,8 +529,6 @@ def train_and_simulate(
             loss_dict = total_loss(model, z_n, z_n1, dt, lambda_jacobi=jacobi_loss, lambda_energy=energy_loss,
                                    method=loss_method, iter=loss_iter)
             
-            loss_keys = list(loss_dict.keys())
-            
             for k, v in loss_dict.items():
                 running_losses[f'train_{k}'] = running_losses.get(f'train_{k}', 0.0) + v.item()
                 
@@ -615,8 +572,15 @@ def train_and_simulate(
         
         scheduler.step()
 
+        for param in model.parameters():
+            param.requires_grad = True
+
         if device.type == 'cuda':
             torch.cuda.synchronize()
+
+            #peak_mem_mb = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
+            #print("Peak mem: ", peak_mem_mb)
+            #torch.cuda.reset_peak_memory_stats(device)
         
         epoch_time = time.time() - start_time
         history['epoch_times'].append(epoch_time)

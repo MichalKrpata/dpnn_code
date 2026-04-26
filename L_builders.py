@@ -57,58 +57,33 @@ class NeuralL(BaseL):
             if dropout > 0:
                 model_layers.append(nn.Dropout(dropout))
 
-        model_layers.append(nn.Linear(hidden_dim, input_dim * input_dim))
+        self.output_dim = (input_dim * (input_dim - 1)) // 2
+
+        model_layers.append(nn.Linear(hidden_dim, self.output_dim))
 
         self.mlp = nn.Sequential(*model_layers)
         self.input_dim = input_dim
 
+        row_idx, col_idx = torch.triu_indices(input_dim, input_dim, offset=1)
+        flat_idx = row_idx * input_dim + col_idx
+        self.register_buffer('flat_idx', flat_idx)
+
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         batch_size = z.shape[0]
         
-        L_flat = self.mlp(z)  # [batch, dim*dim]
-        L = L_flat.view(batch_size, self.input_dim, self.input_dim)
+        L_flat = self.mlp(z)
+
+        zeros_flat = torch.zeros(batch_size, self.input_dim * self.input_dim, device=z.device, dtype=z.dtype)
+
+        expanded_idx = self.flat_idx.unsqueeze(0).expand(batch_size, -1)
+
+        L_full_flat = zeros_flat.scatter(dim=1, index=expanded_idx, src=L_flat)
+
+        L = L_full_flat.view(batch_size, self.input_dim, self.input_dim)
         
         L_antisym = L - L.transpose(1, 2)
         
         return L_antisym
-    
-    def forward_with_jacobian(self, z: torch.Tensor):
-        """Also computes the Jacobian matrix of the network manually (used in jacobi_loss_manual)"""
-        B, D = z.shape
-        x = z
-        
-        J = torch.eye(D, device=z.device).unsqueeze(0).expand(B, -1, -1)
-        
-        for layer in self.mlp:
-            if isinstance(layer, nn.Linear):
-                x = layer(x)
-                J = torch.einsum('oi,bij->boj', layer.weight, J)
-                
-            elif isinstance(layer, nn.Softplus):
-                d_act = torch.sigmoid(x)
-                x = layer(x)
-                J = d_act.unsqueeze(-1) * J
-                
-            elif isinstance(layer, nn.Dropout):
-                x_new = layer(x)
-                if self.training and layer.p > 0:
-                    mask = (x_new != 0.0).float() * (1.0 / (1.0 - layer.p))
-                    J = mask.unsqueeze(-1) * J
-                x = x_new
-                
-            else:
-                print("Warning in forward_with_jacobian(): layer not recognized")
-                x = layer(x)
-
-        L_flat = x
-        L = L_flat.view(B, D, D)
-        
-        J_L = J.view(B, D, D, D)
-        
-        L_antisym = L - L.transpose(1, 2)
-        J_antisym = J_L - J_L.transpose(1, 2)
-        
-        return L_antisym, J_antisym
     
 
 class LinearL(BaseL):

@@ -4,7 +4,7 @@ import subprocess
 potentials = ["harmonic", "gravity", "lennard"]
 L_types = ["neural_net"]
 loss_methods = ["random", "exact forward", "exact backward", "spectral",
-                "random loop", "exact_manual", "batch_max", None]
+                "random loop", "batch_max", None]
 
 @pytest.mark.parametrize("potential", potentials)
 @pytest.mark.parametrize("L_type", L_types)
