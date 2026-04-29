@@ -46,32 +46,41 @@ class TrainableModel(BaseSimulator):
         return super().simulate_batch(z0, dt, n_steps, method)
 
 
-def movement_loss(model, z_n, z_n1, L_n, dt):
+def movement_loss(model, z_n, z_n1, L_n, dt, scheme='CN'):
     """Calculates the loss from the trajectory"""
-    H_n = model.hamiltonian(z_n)
-    H_n1 = model.hamiltonian(z_n1)
+
+    def output(z, L=None):
+        H = model.hamiltonian(z)
+        grad_H = torch.autograd.grad(
+            outputs=H.sum(),
+            inputs=z,
+            create_graph=model.training
+        )[0]
+        if L is None:
+            L = model.L_matrix(z)
+        return torch.bmm(L, grad_H.unsqueeze(-1)).squeeze(-1)
     
-    grad_H_n = torch.autograd.grad(
-        outputs=H_n.sum(),
-        inputs=z_n,
-        create_graph=model.training
-    )[0]
-    
-    grad_H_n1 = torch.autograd.grad(
-        outputs=H_n1.sum(),
-        inputs=z_n1,
-        create_graph=model.training
-    )[0]
-    
-    L_n1 = model.L_matrix(z_n1)
-    
-    L_grad_H_n = torch.bmm(L_n, grad_H_n.unsqueeze(-1)).squeeze(-1)
-    L_grad_H_n1 = torch.bmm(L_n1, grad_H_n1.unsqueeze(-1)).squeeze(-1)
+    if scheme == 'CN':
+        f_n = output(z_n, L_n)
+        f_n1 = output(z_n1)
+        rhs = 0.5 * (f_n + f_n1)
+
+    elif scheme == 'IMR':
+        z_mid = 0.5 * (z_n + z_n1)
+        rhs = output(z_mid)
+
+    elif scheme == 'RK4':
+        k1 = output(z_n, L_n)
+        k2 = output(z_n + 0.5 * dt * k1)
+        k3 = output(z_n + 0.5 * dt * k2)
+        k4 = output(z_n + dt * k3)
+        rhs = (k1 + 2*k2 + 2*k3 + k4) / 6.0
+
+    else:
+        raise ValueError(f"Unknown scheme: {scheme}")
     
     lhs = (z_n1 - z_n) / dt
-    # use the Crank-Nicolson scheme (could be changed to RK4, etc.)
-    rhs = 0.5 * (L_grad_H_n + L_grad_H_n1)
-    
+
     residual = lhs - rhs
     
     return (residual ** 2).mean()
@@ -318,7 +327,7 @@ def jacobi_loss_random_loop(model, z, L, iter=5, dist="rademacher"):
     return total_loss / iter 
 
 
-def total_loss(model, z_n, z_n1, dt, lambda_jacobi=0.0, lambda_energy=0.0, method="random", iter=5, dist="normal"):
+def total_loss(model, z_n, z_n1, dt, lambda_jacobi=0.0, lambda_energy=0.0, method="random", iter=5, dist="normal", scheme='CN'):
     """Calculates all used losses"""
     losses = {}
 
@@ -326,7 +335,7 @@ def total_loss(model, z_n, z_n1, dt, lambda_jacobi=0.0, lambda_energy=0.0, metho
     z_n1 = z_n1.detach().requires_grad_(True)
     L = model.L_matrix(z_n)
     
-    losses['movement'] = movement_loss(model, z_n, z_n1, L, dt)
+    losses['movement'] = movement_loss(model, z_n, z_n1, L, dt, scheme=scheme)
 
     if lambda_energy > 0.0:
         losses['energy'] = lambda_energy * energy_loss(model, z_n, z_n1)
@@ -376,6 +385,7 @@ def train(
     jacobi_loss: float = 0.0,
     loss_method: str = "exact forward",
     loss_iter: int = 5,
+    scheme: str = "CN",
     print_every: int = 1
 ) -> dict:
     """Contains the training and validation loops for a given dataset"""
@@ -403,7 +413,7 @@ def train(
             optimizer.zero_grad()
             
             loss_dict = total_loss(model, z_n, z_n1, dt, lambda_jacobi=jacobi_loss, lambda_energy=energy_loss, 
-                              method=loss_method)
+                              method=loss_method, scheme=scheme, iter=loss_iter)
             
             for k, v in loss_dict.items():
                 running_losses[f'train_{k}'] = running_losses.get(f'train_{k}', 0.0) + v.item()
@@ -438,8 +448,8 @@ def train(
             z_n = z_n.to(device)
             z_n1 = z_n1.to(device)
             
-            v_loss_dict = total_loss(model, z_n, z_n1, dt, lambda_jacobi=jacobi_loss, 
-                                         lambda_energy=energy_loss, method=loss_method, iter=loss_iter)
+            v_loss_dict = total_loss(model, z_n, z_n1, dt, lambda_jacobi=jacobi_loss, lambda_energy=energy_loss, 
+                                     method=loss_method, iter=loss_iter, scheme=scheme)
             for k, v in v_loss_dict.items():
                 running_losses_val[f'val_{k}'] = running_losses_val.get(f'val_{k}', 0.0) + v.item()
 
@@ -489,6 +499,7 @@ def train_and_simulate(
     n_traj_val: int = -1,
     loss_method: str = "exact forward",
     loss_iter: int = 5,
+    scheme: str = "CN",
     print_every: int = 1
 ) -> dict:
     """Contains the training and validation loops, generates new data for each batch"""
@@ -527,7 +538,7 @@ def train_and_simulate(
             optimizer.zero_grad()
             
             loss_dict = total_loss(model, z_n, z_n1, dt, lambda_jacobi=jacobi_loss, lambda_energy=energy_loss,
-                                   method=loss_method, iter=loss_iter)
+                                   method=loss_method, iter=loss_iter, scheme=scheme)
             
             for k, v in loss_dict.items():
                 running_losses[f'train_{k}'] = running_losses.get(f'train_{k}', 0.0) + v.item()
@@ -557,8 +568,8 @@ def train_and_simulate(
             z_n = simulator.random_initial_conditions(n_traj=batch_size)
             z_n1 = step_fn(z_n, dt).squeeze(1)
 
-            v_loss_dict = total_loss(model, z_n, z_n1, dt, lambda_jacobi=jacobi_loss, 
-                                         lambda_energy=energy_loss, method=loss_method, iter=loss_iter)
+            v_loss_dict = total_loss(model, z_n, z_n1, dt, lambda_jacobi=jacobi_loss, lambda_energy=energy_loss, 
+                                     method=loss_method, iter=loss_iter, scheme=scheme)
             for k, v in v_loss_dict.items():
                 running_losses_val[f'val_{k}'] = running_losses_val.get(f'val_{k}', 0.0) + v.item()
         

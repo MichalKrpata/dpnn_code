@@ -151,6 +151,7 @@ def build_parser():
     p.add_argument("--loss_method", default="exact forward",
                    choices=["random", "exact forward", "exact_forward", "exact backward", "exact_backward", "spectral", 
                             "batch_max", "monte_carlo", "random loop", "random_loop", "Monte Carlo"])
+    p.add_argument("--scheme", default="CN", choices=["CN", "IMR", "RK4"])
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--cuda", action="store_true")
  
@@ -212,7 +213,7 @@ if __name__ == "__main__":
     print("Training …\n")
     history = train(
         model, train_loader, val_loader, optimizer, args.dt, args.epochs, device=device,
-        jacobi_loss=args.jacobi_loss, loss_method=args.loss_method,
+        jacobi_loss=args.jacobi_loss, loss_method=args.loss_method, scheme=args.scheme
     )
  
     print(f"\nFinal train loss : {history['train_loss'][-1]:.4e}")

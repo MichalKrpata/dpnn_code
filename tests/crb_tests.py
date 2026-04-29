@@ -3,12 +3,14 @@ import subprocess
 
 L_types = ["neural_net"]
 loss_methods = ["random", None]
+scheme = ["CN", "IMR", "RK4"]
 
 @pytest.mark.parametrize("L_type", L_types)
 @pytest.mark.parametrize("loss_method", loss_methods)
 @pytest.mark.parametrize("sim_batch", [True, False])
 @pytest.mark.parametrize("cuda", [True, False])
-def test_rigid_body_runs(L_type, loss_method, sim_batch, cuda):
+@pytest.mark.parametrize("scheme", scheme)
+def test_rigid_body_runs(L_type, loss_method, sim_batch, cuda, scheme):
     if not loss_method:
         loss_method = "exact forward"
         jacobi_loss = 0.0
@@ -21,6 +23,7 @@ def test_rigid_body_runs(L_type, loss_method, sim_batch, cuda):
         "--L_type", L_type,
         "--loss_method", loss_method,
         "--jacobi_loss", str(jacobi_loss),
+        "--scheme", scheme,
 
         "--epochs", "1",
         "--n_points", "2",

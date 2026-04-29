@@ -110,6 +110,7 @@ def build_parser():
     p.add_argument("--loss_method", default="exact forward",
                    choices=["random", "exact forward", "exact_forward", "exact backward", "exact_backward", "spectral", 
                             "batch_max", "monte_carlo", "random loop", "random_loop", "Monte Carlo"])
+    p.add_argument("--scheme", default="CN", choices=["CN", "IMR", "RK4"])
     p.add_argument("--sim_batch", action="store_true", help="Simulate fresh data each batch instead of a fixed dataset")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--cuda", action="store_true")
@@ -141,8 +142,8 @@ if __name__ == "__main__":
         print("Training with live simulation …\n")
         history = train_and_simulate(
             model, simulator, args.n_trajectories_train * (args.n_points - 1), args.batch_size,
-            optimizer, args.dt, args.epochs, device=device,
-            jacobi_loss=args.jacobi_loss, loss_method=args.loss_method, loss_iter=1,
+            optimizer, args.dt, args.epochs, device=device, jacobi_loss=args.jacobi_loss, 
+            loss_method=args.loss_method, loss_iter=1, scheme=args.scheme
         )
     else:
         print("Generating datasets …")
@@ -163,7 +164,7 @@ if __name__ == "__main__":
         print("Training …\n")
         history = train(
             model, train_loader, val_loader, optimizer, args.dt, args.epochs, device=device,
-            jacobi_loss=args.jacobi_loss, loss_method=args.loss_method,
+            jacobi_loss=args.jacobi_loss, loss_method=args.loss_method, scheme=args.scheme
         )
 
     print(f"\nFinal train loss : {history['train_loss'][-1]:.4e}")
