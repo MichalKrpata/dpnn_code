@@ -51,7 +51,7 @@ def plot_training(history):
 def plot_trajectory(simulator, model, args, device):
     """Plots angle(s) over time for true vs predicted rollout"""
     z0 = simulator.random_initial_conditions(n_traj=1)
-    _, z_true, _ = simulator.simulate_batch(z0, args.dt, args.eval_steps, method="rk4")
+    _, z_true, _ = simulator.simulate_batch(z0, args.dt, args.eval_steps, method=args.sim_method)
     _, z_pred, _ = model.simulate_batch(z0, args.dt, args.eval_steps, method="rk4")
 
     z_true = z_true[0].detach().cpu()
@@ -90,10 +90,14 @@ def build_parser():
     p.add_argument("--l2", type=float, default=1.0, help="Length of rod 2 (double only)")
     p.add_argument("--g", type=float, default=9.81, help="Gravitational acceleration")
 
+    # method used to simulate the dataset
+    p.add_argument("--sim_method", type=str, default="position_verlet", 
+                   choices=["rk4", "euler", "midpoint", "position_verlet"], help="method used to simulate the dataset")
+    
     # model parameters
     p.add_argument("--L_type", default="neural_net", choices=["canonical", "trainable_constant", "linear", "neural_net"])
     p.add_argument("--hidden_dim_H", type=int, default=128)
-    p.add_argument("--hidden_dim_L", type=int, default=128)
+    p.add_argument("--hidden_dim_L", type=int, default=256)
     p.add_argument("--layers_H", type=int, default=2)
     p.add_argument("--layers_L", type=int, default=2)
     p.add_argument("--dropout", type=float, default=0.0)
@@ -104,8 +108,8 @@ def build_parser():
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--dt", type=float, default=0.01)
     p.add_argument("--n_points", type=int, default=10, help="Points per trajectory (#transitions = n_points - 1)")
-    p.add_argument("--n_trajectories_train", type=int, default=200)
-    p.add_argument("--n_trajectories_val", type=int, default=40)
+    p.add_argument("--n_trajectories_train", type=int, default=512)
+    p.add_argument("--n_trajectories_val", type=int, default=64)
     p.add_argument("--jacobi_loss", type=float, default=-1.0, help="Jacobi loss weight, set positive to use it.")
     p.add_argument("--loss_method", default="exact forward",
                    choices=["random", "exact forward", "exact_forward", "exact backward", "exact_backward", "spectral", 
@@ -143,17 +147,17 @@ if __name__ == "__main__":
         history = train_and_simulate(
             model, simulator, args.n_trajectories_train * (args.n_points - 1), args.batch_size,
             optimizer, args.dt, args.epochs, device=device, jacobi_loss=args.jacobi_loss, 
-            loss_method=args.loss_method, loss_iter=1, scheme=args.scheme
+            loss_method=args.loss_method, loss_iter=1, scheme=args.scheme, method=args.sim_method
         )
     else:
         print("Generating datasets …")
         train_dataset = create_dataset_from_simulator(
             simulator, n_trajectories=args.n_trajectories_train,
-            dt=args.dt, n_steps=args.n_points, seed=args.seed,
+            dt=args.dt, n_steps=args.n_points, seed=args.seed, method=args.sim_method
         )
         val_dataset = create_dataset_from_simulator(
             simulator, n_trajectories=args.n_trajectories_val,
-            dt=args.dt, n_steps=args.n_points, seed=args.seed + 100,
+            dt=args.dt, n_steps=args.n_points, seed=args.seed + 100, method=args.sim_method
         )
         print(f"  train: {len(train_dataset)} samples  |  val: {len(val_dataset)} samples\n")
 

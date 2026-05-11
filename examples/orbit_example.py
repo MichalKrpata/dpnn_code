@@ -139,6 +139,10 @@ def build_parser():
     p.add_argument("--layers_L", type=int, default=2)
     p.add_argument("--dropout", type=float, default=0.0)
  
+    # method used to simulate the dataset
+    p.add_argument("--sim_method", type=str, default="position_verlet", 
+                   choices=["rk4", "euler", "midpoint", "position_verlet"], help="method used to simulate the dataset")
+    
     # training parameters
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch_size", type=int, default=128)
@@ -199,10 +203,12 @@ if __name__ == "__main__":
     z0_val = simulator._flatten_qp(q0_val, p0_val)
  
     train_dataset = create_dataset_from_simulator(
-        simulator, n_trajectories=0, dt=args.dt, n_steps=args.n_points, initial_states=z0_train
+        simulator, n_trajectories=0, dt=args.dt, n_steps=args.n_points, initial_states=z0_train,
+        method=args.sim_method
     )
     val_dataset = create_dataset_from_simulator(
-        simulator, n_trajectories=0, dt=args.dt, n_steps=args.n_points, initial_states=z0_val
+        simulator, n_trajectories=0, dt=args.dt, n_steps=args.n_points, initial_states=z0_val,
+        method=args.sim_method
     )
     print(f"  train: {len(train_dataset)} samples  |  val: {len(val_dataset)} samples\n")
  

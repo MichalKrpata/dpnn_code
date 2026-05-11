@@ -52,7 +52,7 @@ def plot_training(history):
 def plot_trajectory(simulator, model, args, device):
     """Plots angular momenta (Pi1, Pi2) and Euler angles for true vs predicted trajectory"""
     z0 = simulator.random_initial_conditions(n_traj=1)
-    _, z_true, _ = simulator.simulate_batch(z0, args.dt, args.eval_steps, method="rk4")
+    _, z_true, _ = simulator.simulate_batch(z0, args.dt, args.eval_steps, method=args.sim_method)
     _, z_pred, _ = model.simulate_batch(z0, args.dt, args.eval_steps, method="rk4")
 
     z_true = z_true[0].detach().cpu()
@@ -102,6 +102,10 @@ def build_parser():
                    help="Offset vector for body 1")
     p.add_argument("--S2", type=float, nargs=3, default=[0.0, 0.0, -1.0],
                    help="Offset vector for body 2")
+    
+    # method used to simulate the dataset
+    p.add_argument("--sim_method", type=str, default="rk4", 
+                   choices=["rk4", "euler", "midpoint", "position_verlet"], help="method used to simulate the dataset")
 
     # model parameters
     p.add_argument("--L_type", default="neural_net", choices=["canonical", "trainable_constant", "linear", "neural_net"])
@@ -123,7 +127,7 @@ def build_parser():
     p.add_argument("--loss_method", default="exact forward",
                    choices=["random", "exact forward", "exact_forward", "exact backward", "exact_backward", "spectral", 
                             "batch_max", "monte_carlo", "random loop", "random_loop", "Monte Carlo"])
-    p.add_argument("--scheme", default="CN", choices=["CN", "IMR", "RK4"])
+    p.add_argument("--scheme", default="CN", choices=["CN", "IMR", "RK4"], help="scheme used in the trajectory loss")
     p.add_argument("--sim_batch", action="store_true", help="Simulate fresh data each batch instead of a fixed dataset")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--cuda", action="store_true")
@@ -159,17 +163,17 @@ if __name__ == "__main__":
         history = train_and_simulate(
             model, simulator, args.n_trajectories_train * (args.n_points - 1), args.batch_size,
             optimizer, args.dt, args.epochs, device=device, jacobi_loss=args.jacobi_loss, 
-            loss_method=args.loss_method, loss_iter=1, scheme=args.scheme
+            loss_method=args.loss_method, loss_iter=1, scheme=args.scheme, method=args.sim_method
         )
     else:
         print("Generating datasets …")
         train_dataset = create_dataset_from_simulator(
             simulator, n_trajectories=args.n_trajectories_train,
-            dt=args.dt, n_steps=args.n_points, seed=args.seed,
+            dt=args.dt, n_steps=args.n_points, seed=args.seed, method=args.sim_method
         )
         val_dataset = create_dataset_from_simulator(
             simulator, n_trajectories=args.n_trajectories_val,
-            dt=args.dt, n_steps=args.n_points, seed=args.seed + 100,
+            dt=args.dt, n_steps=args.n_points, seed=args.seed + 100, method=args.sim_method
         )
         print(f"  train: {len(train_dataset)} samples  |  val: {len(val_dataset)} samples\n")
 

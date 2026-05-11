@@ -51,12 +51,33 @@ class BaseSimulator(nn.Module):
             
         return z_next
     
+    def step_position_verlet(self, z: torch.Tensor, dt: float) -> torch.Tensor:
+        """Single Position Verlet/Leapfrog step"""
+        half_dim = self.dim // 2
+        q, p = z[..., :half_dim], z[..., half_dim:]
+
+        dz_initial = self.forward(z)
+        dq_initial = dz_initial[..., :half_dim]
+        q_half = q + 0.5 * dt * dq_initial
+
+        z_half = torch.cat([q_half, p], dim=-1)
+        dz_half = self.forward(z_half)
+        dp_half = dz_half[..., half_dim:]
+        p_next = p + dt * dp_half
+
+        z_next_p = torch.cat([q_half, p_next], dim=-1)
+        dz_next = self.forward(z_next_p)
+        dq_next = dz_next[..., :half_dim]
+        q_next = q_half + 0.5 * dt * dq_next
+
+        return torch.cat([q_next, p_next], dim=-1)
+    
     def simulate_batch(
         self,
         z0: torch.Tensor,
         dt: float,
         n_steps: int,
-        method: Literal['rk4', 'euler', 'midpoint'] = 'rk4'
+        method: Literal['rk4', 'euler', 'midpoint', 'position_verlet'] = 'rk4'
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Simulates a given number of steps from the initial state z0 for a batch"""
         n_traj = z0.shape[0]
@@ -73,6 +94,8 @@ class BaseSimulator(nn.Module):
             step_fn = self.step_euler
         elif method == 'midpoint':
             step_fn = self.step_implicit_midpoint
+        elif method == 'position_verlet':
+            step_fn = self.step_position_verlet
         else:
             raise ValueError(f"Unknown integration method: {method}")
         z = z0

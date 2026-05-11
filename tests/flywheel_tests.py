@@ -3,13 +3,15 @@ import subprocess
 
 L_types = ["neural_net", "canonical"]
 loss_methods = ["spectral", None]
+sim_methods = ["rk4", "euler", "midpoint", "position_verlet"]
 
 @pytest.mark.parametrize("L_type", L_types)
 @pytest.mark.parametrize("loss_method", loss_methods)
 @pytest.mark.parametrize("n_flywheels", [2, 3])
 @pytest.mark.parametrize("sim_batch", [True, False])
 @pytest.mark.parametrize("cuda", [True, False])
-def test_flywheel_runs(L_type, loss_method, n_flywheels, sim_batch, cuda):
+@pytest.mark.parametrize("sim_method", sim_methods)
+def test_flywheel_runs(L_type, loss_method, n_flywheels, sim_batch, cuda, sim_method):
     I = ["1.0"] if n_flywheels == 2 else ["1.0", "1.0", "1.0"]
     k = ["1.0"] if n_flywheels == 2 else ["1.0", "1.0"]
 
@@ -25,6 +27,8 @@ def test_flywheel_runs(L_type, loss_method, n_flywheels, sim_batch, cuda):
         "--n_flywheels", str(n_flywheels),
         "--I", *I,
         "--k", *k,
+
+        "--sim_method", sim_method,
 
         "--L_type", L_type,
         "--loss_method", loss_method,

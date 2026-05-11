@@ -60,6 +60,7 @@ def movement_loss(model, z_n, z_n1, L_n, dt, scheme='CN'):
             L = model.L_matrix(z)
         return torch.bmm(L, grad_H.unsqueeze(-1)).squeeze(-1)
     
+    # use the specified integration scheme to approximate the derivative
     if scheme == 'CN':
         f_n = output(z_n, L_n)
         f_n1 = output(z_n1)
